@@ -64,4 +64,6 @@ dataset/
 runs/
 logs/
 dataset/
-dataset/
+
+# Learning plan
+leval_up.md
