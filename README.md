@@ -716,7 +716,7 @@ Head (Decoupled Detection Head)
 
 - GitHub: https://github.com/yushui6666/YOLO_Learn
 - Issues: 提交 GitHub Issue
-- Email: [你的邮箱]
+- Email: [nieyuqing270@gmail.com]
 
 ---
 
