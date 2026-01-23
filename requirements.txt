@@ -1,0 +1,22 @@
+# PyTorch
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 图像处理
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# 数据处理
+pyyaml>=6.0
+
+# 训练工具
+tensorboard>=2.14.0
+tqdm>=4.66.0
+
+# 评估工具
+pycocotools>=2.0.7
+
+# 可选：加速库（如果需要）
+# nvidia-dali-cuda110>=1.30.0  # NVIDIA DALI for data loading
+# apex>=0.9.10dev  # NVIDIA Apex for mixed precision training
