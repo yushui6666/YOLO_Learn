@@ -70,7 +70,7 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 创建 TensorBoard 写入器
-        self.writer = SummaryWriter(log_dir=str(self.output_dir / 'dataimprove'))
+        self.writer = SummaryWriter(log_dir=str(self.output_dir / 'best'))
         
         # 训练参数
         self.epochs = config['training']['epochs']
@@ -422,7 +422,7 @@ class Trainer:
 
 def main():
     # 直接加载配置文件
-    config_path = 'configs/data_improve.yaml'
+    config_path = 'configs/best.yaml'
     print(f"正在从 {config_path} 加载配置文件")
     
     with open(config_path, 'r', encoding='utf-8') as f:

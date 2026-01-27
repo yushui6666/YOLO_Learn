@@ -55,8 +55,8 @@ class Conv(nn.Module):
     """
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
         super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
-        self.bn = nn.BatchNorm2d(c2)
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)#groups是分组卷积，作用是减少参数量和计算量
+        self.bn = nn.BatchNorm2d(c2)#批归一化作用是加速收敛，防止过拟合
         self.act = nn.SiLU() if act else nn.Identity()
 
     def forward(self, x):
