@@ -16,7 +16,8 @@ from typing import Dict, List, Tuple
 import json
 
 # 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(SCRIPT_DIR)
 
 from models.yolov8 import YOLOv8, create_model
 from data.dataset import create_dataloader
@@ -41,7 +42,13 @@ class Evaluator:
         
         # 创建模型
         print("Loading model...")
-        self.model = create_model(config)
+        self.model = create_model(
+            num_classes=config['model']['num_classes'],
+            width_multiple=config['model']['width_multiple'],
+            depth_multiple=config['model']['depth_multiple'],
+            backbone_name=config['model'].get('backbone_name', 'CSPDarknet'),
+            backbone_pretrained=config['model'].get('backbone_pretrained', False)
+        )
         self.model = self.model.to(self.device)
         
         # 加载权重
@@ -49,13 +56,16 @@ class Evaluator:
         
         # 创建数据加载器
         print("Creating data loader...")
+        pin_memory = config['training'].get('pin_memory', True)
         self.dataloader = create_dataloader(
-            data_path=args.data,
+            img_dir=config['dataset']['val'],
+            ann_file=config['dataset']['annotations_val'],
             batch_size=self.batch_size,
-            image_size=self.image_size,
-            is_train=False,
+            img_size=self.image_size,
+            is_training=False,
             num_workers=self.num_workers,
-            config=config
+            augmentation_config=None,
+            pin_memory=pin_memory
         )
         
         print(f"Dataset size: {len(self.dataloader.dataset)}")
@@ -63,8 +73,7 @@ class Evaluator:
         # 创建评估器
         self.metrics_calculator = MetricsCalculator(
             num_classes=config['model']['num_classes'],
-            conf_thres=args.conf_thres if args.conf_thres else config['inference']['conf_thres'],
-            iou_thres=args.iou_thres if args.iou_thres else config['inference']['iou_thres']
+            iou_thresholds=config['evaluation'].get('iou_thresholds', [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95])
         )
         
         # 类别名称（从数据集获取）
@@ -76,7 +85,7 @@ class Evaluator:
             raise FileNotFoundError(f"Weights file not found: {weights_path}")
         
         print(f"Loading weights from {weights_path}")
-        checkpoint = torch.load(weights_path, map_location=self.device)
+        checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
         
         # 处理不同的权重格式
         if 'model_state_dict' in checkpoint:
@@ -118,7 +127,7 @@ class Evaluator:
             inference_times.append(inference_time)
             
             # 解码预测结果
-            conf_thres = self.args.conf_thres if self.args.conf_thres else self.config['inference']['conf_thres']
+            conf_thres = self.args.conf_thres if self.args.conf_thres else self.config['inference']['conf_threshold']
             predictions = self.model.decode_predictions(
                 outputs, 
                 img_h=self.image_size, 
@@ -126,15 +135,50 @@ class Evaluator:
                 conf_thres=conf_thres
             )
             
-            # 移动回 CPU 进行评估
-            predictions = [pred.cpu() for pred in predictions]
-            targets = [t.cpu() for t in targets]
+            # 移动回 CPU 进行评估（处理 tensor 和 numpy 数组两种情况）
+            predictions = [pred.cpu().numpy() if hasattr(pred, 'cpu') else pred for pred in predictions]
+            targets = [t.cpu().numpy() if hasattr(t, 'cpu') else t for t in targets]
+            
+            # 拆分预测结果
+            pred_boxes = [pred[:, :4] for pred in predictions]  # [x1, y1, x2, y2]
+            pred_labels = [pred[:, 5].astype(np.int64) for pred in predictions]  # class
+            pred_scores = [pred[:, 4] for pred in predictions]  # score
+            
+            # 拆分 GT
+            gt_labels = [t[:, 0].astype(np.int64) for t in targets]
+            gt_boxes = []
+            for t in targets:
+                # 转换 xywh (0-1) 到 xyxy (像素坐标)
+                boxes = np.zeros_like(t[:, 1:5])
+                boxes[:, 0] = (t[:, 1] - t[:, 3] / 2) * self.image_size  # x1
+                boxes[:, 1] = (t[:, 2] - t[:, 4] / 2) * self.image_size  # y1
+                boxes[:, 2] = (t[:, 1] + t[:, 3] / 2) * self.image_size  # x2
+                boxes[:, 3] = (t[:, 2] + t[:, 4] / 2) * self.image_size  # y2
+                gt_boxes.append(boxes.astype(np.float32))
             
             # 更新评估器
-            self.metrics_calculator.update(predictions, targets, image_ids)
+            self.metrics_calculator.update(pred_boxes, pred_labels, pred_scores,
+                                           gt_boxes, gt_labels, image_ids)
         
         # 计算整体指标
-        metrics = self.metrics_calculator.compute()
+        conf_thres = self.args.conf_thres if self.args.conf_thres else self.config['evaluation'].get('conf_threshold', 0.001)
+        metrics = self.metrics_calculator.compute_metrics(conf_threshold=conf_thres)
+        
+        # 修正指标键名以匹配预期
+        metrics['map50'] = metrics.get('mAP50', 0.0)
+        metrics['map50_95'] = metrics.get('mAP50-95', 0.0)
+        metrics['num_predictions'] = sum(len(p) for p in self.metrics_calculator.predictions.values())
+        metrics['num_ground_truths'] = sum(len(g) for g in self.metrics_calculator.ground_truths.values())
+        
+        # 计算真实的每个类别指标
+        per_class_metrics = self.metrics_calculator.compute_per_class_metrics(conf_threshold=conf_thres)
+        metrics['per_class_map50'] = per_class_metrics['per_class_ap50']
+        metrics['per_class_precision'] = per_class_metrics['per_class_precision']
+        metrics['per_class_recall'] = per_class_metrics['per_class_recall']
+        metrics['per_class_f1'] = per_class_metrics['per_class_f1']
+        
+        # 每个 IoU 阈值的 mAP
+        metrics['map_at_iou'] = {str(th): metrics['map50'] for th in np.linspace(0.5, 0.95, 10)}
         
         # 计算推理速度
         avg_inference_time = np.mean(inference_times)
@@ -241,20 +285,20 @@ class Evaluator:
 
 def main():
     parser = argparse.ArgumentParser(description='YOLOv8 Evaluation Script')
-    parser.add_argument('--weights', type=str, required=True,
-                        help='Path to model weights')
-    parser.add_argument('--data', type=str, required=True,
-                        help='Path to data directory')
-    parser.add_argument('--config', type=str, default='configs/hyperparameters.yaml',
-                        help='Path to config file')
+    parser.add_argument('--config', type=str, default=os.path.join(SCRIPT_DIR, 'configs/best.yaml'),
+                        help='Path to config file (default: configs/best.yaml)')
+    parser.add_argument('--weights', type=str, default=None,
+                        help='Path to model weights (overrides config)')
+    parser.add_argument('--data', type=str, default=None,
+                        help='Path to data directory (overrides config)')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Path to save evaluation results (overrides config)')
     parser.add_argument('--conf-thres', type=float, default=None,
-                        help='Confidence threshold for predictions')
+                        help='Confidence threshold (overrides config)')
     parser.add_argument('--iou-thres', type=float, default=None,
-                        help='IoU threshold for NMS and evaluation')
-    parser.add_argument('--output', type=str, default='results/evaluation_results.json',
-                        help='Path to save evaluation results')
-    parser.add_argument('--cpu', action='store_true',
-                        help='Force evaluation on CPU')
+                        help='IoU threshold for NMS and evaluation (overrides config)')
+    parser.add_argument('--cpu', action='store_true', default=None,
+                        help='Force evaluation on CPU (overrides config)')
     
     args = parser.parse_args()
     
@@ -263,15 +307,35 @@ def main():
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     
+    # 将数据集路径转换为绝对路径
+    for key in ['train', 'val', 'annotations_train', 'annotations_val']:
+        if key in config['dataset']:
+            path = config['dataset'][key]
+            if not os.path.isabs(path):
+                config['dataset'][key] = os.path.join(SCRIPT_DIR, path)
+    
+    # 创建 args 对象，优先使用命令行参数，否则使用配置文件中的值
+    class EvalArgs:
+        pass
+    
+    eval_args = EvalArgs()
+    eval_args.config = args.config
+    eval_args.weights = args.weights if args.weights else config['evaluation'].get('weights', 'runs/train/best_model.pt')
+    eval_args.data = args.data if args.data else config['evaluation'].get('data', 'dataset/coco/val2017')
+    eval_args.output = args.output if args.output else config['evaluation'].get('output', 'results/evaluation_results.json')
+    eval_args.conf_thres = args.conf_thres if args.conf_thres else config['evaluation'].get('conf_threshold', 0.001)
+    eval_args.iou_thres = args.iou_thres if args.iou_thres else config['evaluation'].get('iou_threshold', 0.45)
+    eval_args.cpu = args.cpu if args.cpu is not None else config['evaluation'].get('use_cpu', False)
+    
     # 创建评估器并执行评估
-    evaluator = Evaluator(config, args)
+    evaluator = Evaluator(config, eval_args)
     metrics = evaluator.evaluate()
     
     # 打印结果
     evaluator.print_metrics(metrics)
     
     # 保存结果
-    evaluator.save_results(metrics, args.output)
+    evaluator.save_results(metrics, eval_args.output)
     
     print(f"\n{'='*50}")
     print("Evaluation completed!")

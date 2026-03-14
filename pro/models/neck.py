@@ -23,8 +23,9 @@ class UpSample(nn.Module):
 class PANet(nn.Module):
     """
     Path Aggregation Network (PANet) neck for YOLOv8
+    Supports automatic channel adaptation for different backbones
     """
-    def __init__(self, in_channels, width_multiple=1.0, depth_multiple=1.0):
+    def __init__(self, in_channels, width_multiple=1.0, depth_multiple=1.0, use_cbam=True):
         super().__init__()
         
         # Calculate channels based on width_multiple
@@ -37,41 +38,50 @@ class PANet(nn.Module):
         def make_n(n):
             return max(round(n * depth_multiple), 1) if n > 1 else n
         
+        # Target channels (standard YOLOv8 channels)
+        target_c3 = make_ch(256)
+        target_c4 = make_ch(512)
+        target_c5 = make_ch(1024)
+        
         # Input channels from backbone: [P3, P4, P5]
         c3, c4, c5 = in_channels
+        
+        # Channel adaptation layers (1x1 conv to align channels from different backbones)
+        self.adapt_c3 = Conv(c3, target_c3, 1, 1) if c3 != target_c3 else nn.Identity()
+        self.adapt_c4 = Conv(c4, target_c4, 1, 1) if c4 != target_c4 else nn.Identity()
+        self.adapt_c5 = Conv(c5, target_c5, 1, 1) if c5 != target_c5 else nn.Identity()
         
         # Top-down pathway
         # P5 -> P4
         self.up1 = UpSample(scale_factor=2)
-        self.h1 = Conv(c5 + c4, make_ch(512), 1, 1)
-        self.c2f_1 = C2f(make_ch(512), make_ch(512), n=make_n(3))
+        self.h1 = Conv(target_c5 + target_c4, target_c4, 1, 1)
+        self.c2f_1 = C2f(target_c4, target_c4, n=make_n(3))
         
         # P4 -> P3
         self.up2 = UpSample(scale_factor=2)
-        self.h2 = Conv(make_ch(512) + c3, make_ch(256), 1, 1)
-        self.c2f_2 = C2f(make_ch(256), make_ch(256), n=make_n(3))
+        self.h2 = Conv(target_c4 + target_c3, target_c3, 1, 1)
+        self.c2f_2 = C2f(target_c3, target_c3, n=make_n(3))
         
         # Bottom-up pathway
         # P3 -> P4
-        self.down1 = nn.Conv2d(make_ch(256), make_ch(256), 3, 2, padding=1)
-        self.h3 = Conv(make_ch(256) + make_ch(512), make_ch(512), 1, 1)
-        self.c2f_3 = C2f(make_ch(512), make_ch(512), n=make_n(3))
+        self.down1 = nn.Conv2d(target_c3, target_c3, 3, 2, padding=1)
+        self.h3 = Conv(target_c3 + target_c4, target_c4, 1, 1)
+        self.c2f_3 = C2f(target_c4, target_c4, n=make_n(3))
         
         # P4 -> P5
-        self.down2 = nn.Conv2d(make_ch(512), make_ch(512), 3, 2, padding=1)
-        self.h4 = Conv(make_ch(512) + c5, make_ch(1024), 1, 1)
-        self.c2f_4 = C2f(make_ch(1024), make_ch(1024), n=make_n(3))
+        self.down2 = nn.Conv2d(target_c4, target_c4, 3, 2, padding=1)
+        self.h4 = Conv(target_c4 + target_c5, target_c5, 1, 1)
+        self.c2f_4 = C2f(target_c5, target_c5, n=make_n(3))
         
         # CBAM modules for P4 and P5 feature enhancement
-        self.cbam_p4 = CBAM(make_ch(512))   # CBAM for medium-scale features
-        self.cbam_p5 = CBAM(make_ch(1024))  # CBAM for large-scale features
+        self.use_cbam = use_cbam
+        if use_cbam:
+            self.cbam_p4 = CBAM(target_c4)
+            self.cbam_p5 = CBAM(target_c5)
         
         # Output channels
-        self.out_channels = [
-            make_ch(256),   # P3_out
-            make_ch(512),   # P4_out
-            make_ch(1024)   # P5_out
-        ]
+        self.out_channels = [target_c3, target_c4, target_c5]
+        self.in_channels = in_channels
 
     def forward(self, x):
         """
@@ -81,6 +91,11 @@ class PANet(nn.Module):
             List of output feature maps [P3_out, P4_out, P5_out]
         """
         p3, p4, p5 = x
+        
+        # Adapt channels from different backbones
+        p3 = self.adapt_c3(p3)
+        p4 = self.adapt_c4(p4)
+        p5 = self.adapt_c5(p5)
         
         # Top-down pathway
         # P5 -> P4
@@ -109,8 +124,9 @@ class PANet(nn.Module):
         p5_bu = self.c2f_4(p4_down_cat)
         
         # Apply CBAM to enhance P4 and P5 features
-        p4_bu = self.cbam_p4(p4_bu)
-        p5_bu = self.cbam_p5(p5_bu)
+        if self.use_cbam:
+            p4_bu = self.cbam_p4(p4_bu)
+            p5_bu = self.cbam_p5(p5_bu)
         
         return [p3_td, p4_bu, p5_bu]
 

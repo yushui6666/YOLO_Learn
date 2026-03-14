@@ -13,7 +13,8 @@ def create_dataloader(
     img_size: int = 640,
     num_workers: int = 4,
     is_training: bool = True,
-    augmentation_config: dict = None
+    augmentation_config: dict = None,
+    pin_memory: bool = True
 ) -> DataLoader:
     """
     Create a DataLoader for COCO dataset
@@ -61,7 +62,7 @@ def create_dataloader(
         batch_size=batch_size,
         shuffle=is_training,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         collate_fn=collate_fn,
         drop_last=is_training
     )

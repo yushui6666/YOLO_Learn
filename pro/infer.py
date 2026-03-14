@@ -16,7 +16,8 @@ from typing import Dict, List, Tuple, Optional, Union
 import json
 
 # 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(SCRIPT_DIR)
 
 from models.yolov8 import YOLOv8, create_model
 
@@ -318,7 +319,7 @@ def main():
                         help='Path to model weights')
     parser.add_argument('--source', type=str, required=True,
                         help='Path to image, video, or directory')
-    parser.add_argument('--config', type=str, default='configs/hyperparameters.yaml',
+    parser.add_argument('--config', type=str, default=os.path.join(SCRIPT_DIR, 'configs/best.yaml'),
                         help='Path to config file')
     parser.add_argument('--conf-thres', type=float, default=None,
                         help='Confidence threshold')
@@ -338,6 +339,13 @@ def main():
     # 加载配置
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
+    
+    # 将数据集路径转换为绝对路径
+    for key in ['train', 'val', 'annotations_train', 'annotations_val']:
+        if key in config.get('dataset', {}):
+            path = config['dataset'][key]
+            if not os.path.isabs(path):
+                config['dataset'][key] = os.path.join(SCRIPT_DIR, path)
     
     # 覆盖配置参数
     if args.conf_thres is not None:

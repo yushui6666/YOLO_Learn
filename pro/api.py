@@ -3,9 +3,15 @@ YOLOv8 简单 API
 不需要命令行，直接通过 Python 代码调用训练、评估和推理功能
 """
 
+import os
 import yaml
 from pathlib import Path
 from typing import Dict, Optional
+
+# 添加项目根目录到路径
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+import sys
+sys.path.append(SCRIPT_DIR)
 
 from models.yolov8 import create_model
 from data.dataset import create_dataloader
@@ -18,16 +24,27 @@ from infer import YOLOv8Inference
 class YOLOv8:
     """YOLOv8 高级 API"""
     
-    def __init__(self, config_path: str = 'configs/hyperparameters.yaml'):
+    def __init__(self, config_path: str = None):
         """
         初始化 YOLOv8
         
         Args:
             config_path: 配置文件路径
         """
+        # 默认配置文件路径
+        if config_path is None:
+            config_path = os.path.join(SCRIPT_DIR, 'configs/best.yaml')
+        
         # 加载配置
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+        
+        # 将数据集路径转换为绝对路径
+        for key in ['train', 'val', 'annotations_train', 'annotations_val']:
+            if key in self.config.get('dataset', {}):
+                path = self.config['dataset'][key]
+                if not os.path.isabs(path):
+                    self.config['dataset'][key] = os.path.join(SCRIPT_DIR, path)
         
         self.config_path = config_path
         self.model = None
@@ -188,7 +205,7 @@ class YOLOv8:
 # 便捷函数
 def train_yolov8(train_data_path: str,
                   val_data_path: str,
-                  config_path: str = 'configs/hyperparameters.yaml',
+                  config_path: str = None,
                   output_dir: str = 'runs/train',
                   epochs: Optional[int] = None,
                   batch_size: Optional[int] = None,
@@ -219,7 +236,7 @@ def train_yolov8(train_data_path: str,
 
 def evaluate_yolov8(weights_path: str,
                      data_path: str,
-                     config_path: str = 'configs/hyperparameters.yaml',
+                     config_path: str = None,
                      output_path: str = 'results/evaluation_results.json',
                      conf_thres: Optional[float] = None,
                      iou_thres: Optional[float] = None):
@@ -250,7 +267,7 @@ def evaluate_yolov8(weights_path: str,
 
 def predict_yolov8(image_path: str,
                     weights_path: str,
-                    config_path: str = 'configs/hyperparameters.yaml',
+                    config_path: str = None,
                     conf_thres: Optional[float] = None,
                     visualize: bool = True,
                     save_path: Optional[str] = None):
@@ -294,12 +311,12 @@ if __name__ == '__main__':
     
     # 示例 2: 评估模型
     print("\n示例 2: 评估模型")
-    metrics = evaluate_yolov8(
-        weights_path='runs/train/best_model.pt',
-        data_path='datasets/coco/val'
-    )
-    print(f"mAP@0.5: {metrics['map50']}")
-    print(f"mAP@0.5:0.95: {metrics['map50_95']}")
+    # metrics = evaluate_yolov8(
+    #     weights_path='runs/train/best_model.pt',
+    #     data_path='datasets/coco/val'
+    # )
+    # print(f"mAP@0.5: {metrics['map50']}")
+    # print(f"mAP@0.5:0.95: {metrics['map50_95']}")
     
     # 示例 3: 推理
     print("\n示例 3: 推理")

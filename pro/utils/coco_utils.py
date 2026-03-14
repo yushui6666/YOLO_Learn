@@ -28,7 +28,22 @@ class COCODataset:
         
         # Load COCO annotations
         self.coco = COCO(ann_file)
-        self.ids = list(sorted(self.coco.imgs.keys()))
+        all_ids = list(sorted(self.coco.imgs.keys()))
+        
+        # Filter out images that don't exist on disk
+        self.ids = []
+        missing_count = 0
+        for img_id in all_ids:
+            img_info = self.coco.imgs[img_id]
+            img_path = os.path.join(self.img_dir, img_info['file_name'])
+            if os.path.exists(img_path):
+                self.ids.append(img_id)
+            else:
+                missing_count += 1
+        
+        if missing_count > 0:
+            print(f"警告: 跳过 {missing_count} 个缺失的图像文件")
+        print(f"有效图像数量: {len(self.ids)}")
         
         # Category mapping
         self.cat_ids = sorted(self.coco.getCatIds())

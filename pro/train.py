@@ -18,7 +18,8 @@ from tqdm import tqdm
 from typing import Dict, Tuple, Optional
 
 # 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(SCRIPT_DIR)
 
 from models.yolov8 import YOLOv8, create_model
 from data.dataset import create_dataloader
@@ -136,6 +137,7 @@ class Trainer:
         
         # 创建数据加载器
         print("正在创建数据加载器...")
+        pin_memory = config['training'].get('pin_memory', True)
         self.train_loader = create_dataloader(
             img_dir=config['dataset']['train'],
             ann_file=config['dataset']['annotations_train'],
@@ -143,7 +145,8 @@ class Trainer:
             img_size=self.image_size,
             is_training=True,
             num_workers=self.num_workers,
-            augmentation_config=config.get('augmentation', None)
+            augmentation_config=config.get('augmentation', None),
+            pin_memory=pin_memory
         )
         
         self.val_loader = create_dataloader(
@@ -153,7 +156,8 @@ class Trainer:
             img_size=self.image_size,
             is_training=False,
             num_workers=self.num_workers,
-            augmentation_config=None
+            augmentation_config=None,
+            pin_memory=pin_memory
         )
         
         # 创建评估器
@@ -422,11 +426,18 @@ class Trainer:
 
 def main():
     # 直接加载配置文件
-    config_path = 'configs/best.yaml'
+    config_path = os.path.join(SCRIPT_DIR, 'configs/best.yaml')
     print(f"正在从 {config_path} 加载配置文件")
     
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
+    
+    # 将数据集路径转换为绝对路径
+    for key in ['train', 'val', 'annotations_train', 'annotations_val']:
+        if key in config['dataset']:
+            path = config['dataset'][key]
+            if not os.path.isabs(path):
+                config['dataset'][key] = os.path.join(SCRIPT_DIR, path)
     
     # 设置随机种子
     seed = config.get('training', {}).get('seed', 42)

@@ -300,6 +300,101 @@ class MetricsCalculator:
 
         return float(np.mean(ap_per_class)) if ap_per_class else 0.0
 
+    def compute_per_class_metrics(self, conf_threshold=0.001, iou_threshold=0.5):
+        """
+        Compute per-class metrics: AP50, precision, recall, F1.
+        
+        Args:
+            conf_threshold: Confidence threshold for predictions
+            iou_threshold: IoU threshold for matching
+            
+        Returns:
+            dict with per_class_ap50, per_class_precision, per_class_recall, per_class_f1
+        """
+        per_class_ap50 = []
+        per_class_precision = []
+        per_class_recall = []
+        per_class_f1 = []
+        
+        for class_id in range(self.num_classes):
+            preds, gts, num_gt = self._gather_class_detections(class_id, conf_threshold)
+            
+            # 计算 AP@0.5
+            gts_copy = {
+                img_id: [
+                    {'box': gt['box'], 'detected': False}
+                    for gt in gt_list
+                ]
+                for img_id, gt_list in gts.items()
+            }
+            ap50 = self.compute_ap(preds, gts_copy, num_gt, iou_threshold)
+            per_class_ap50.append(float(ap50))
+            
+            # 计算该类别的 TP, FP, FN
+            tp = 0
+            fp = 0
+            fn = 0
+            
+            # 重新收集 GT 用于匹配（需要重置 detected 标志）
+            gts_for_match = {
+                img_id: [
+                    {'box': gt['box'], 'detected': False}
+                    for gt in gt_list
+                ]
+                for img_id, gt_list in gts.items()
+            }
+            
+            # 按置信度排序预测
+            sorted_preds = sorted(preds, key=lambda x: -x['score'])
+            
+            for pred in sorted_preds:
+                image_id = pred['image_id']
+                pred_box = pred['box']
+                
+                gt_list = gts_for_match.get(image_id, [])
+                if len(gt_list) == 0:
+                    fp += 1
+                    continue
+                
+                # 找最佳匹配的 GT
+                best_iou = 0.0
+                best_idx = -1
+                for idx, gt in enumerate(gt_list):
+                    if gt['detected']:
+                        continue
+                    iou = self.compute_iou(pred_box, gt['box'])
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_idx = idx
+                
+                if best_iou >= iou_threshold and best_idx >= 0:
+                    tp += 1
+                    gt_list[best_idx]['detected'] = True
+                else:
+                    fp += 1
+            
+            # 计算FN（未匹配的GT数量）
+            for gt_list in gts_for_match.values():
+                for gt in gt_list:
+                    if not gt['detected']:
+                        fn += 1
+            
+            # 计算 precision, recall, f1
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            per_class_precision.append(float(precision))
+            per_class_recall.append(float(recall))
+            per_class_f1.append(float(f1))
+        
+        return {
+            'per_class_ap50': per_class_ap50,
+            'per_class_precision': per_class_precision,
+            'per_class_recall': per_class_recall,
+            'per_class_f1': per_class_f1
+        }
+
     def compute_metrics(self, conf_threshold=0.001):
         """
         Compute all metrics:

@@ -5,10 +5,12 @@ from torchvision.ops import nms
 # Handle both relative and absolute imports
 try:
     from .backbone import CSPDarknet
+    from .backbone_utils import build_backbone, list_backbones, get_backbone_info
     from .neck import PANet
     from .head import DetectHead
 except ImportError:
     from backbone import CSPDarknet
+    from backbone_utils import build_backbone, list_backbones, get_backbone_info
     from neck import PANet
     from head import DetectHead
 
@@ -16,22 +18,35 @@ except ImportError:
 class YOLOv8(nn.Module):
     """
     Complete YOLOv8 model with backbone, neck, and head
+    Supports multiple backbone networks with seamless switching
     """
-    def __init__(self, num_classes=80, width_multiple=1.0, depth_multiple=1.0):
+    def __init__(self, num_classes=80, width_multiple=1.0, depth_multiple=1.0, 
+                 backbone_name='CSPDarknet', backbone_pretrained=False):
         super().__init__()
         
         self.num_classes = num_classes
         self.width_multiple = width_multiple
         self.depth_multiple = depth_multiple
+        self.backbone_name = backbone_name
         
-        # Backbone
-        self.backbone = CSPDarknet(
-            in_channels=3,
-            width_multiple=width_multiple,
-            depth_multiple=depth_multiple
-        )
+        # Backbone - support multiple backbone types
+        if backbone_name.lower() in ['cspdarknet', 'yolo', 'yolov8']:
+            self.backbone = CSPDarknet(
+                in_channels=3,
+                width_multiple=width_multiple,
+                depth_multiple=depth_multiple
+            )
+        else:
+            # Use factory function for other backbones
+            self.backbone = build_backbone(
+                backbone_name=backbone_name,
+                in_channels=3,
+                width_multiple=width_multiple,
+                depth_multiple=depth_multiple,
+                pretrained=backbone_pretrained
+            )
         
-        # Neck
+        # Neck - automatically adapts to backbone output channels
         self.neck = PANet(
             in_channels=self.backbone.out_channels,
             width_multiple=width_multiple,
@@ -253,34 +268,68 @@ class YOLOv8(nn.Module):
         print(f"Saved weights to {save_path}")
 
 
-def create_model(num_classes=None, width_multiple=None, depth_multiple=None):
+def create_model(num_classes=None, width_multiple=None, depth_multiple=None, 
+                 backbone_name='CSPDarknet', backbone_pretrained=False):
     """
-    Factory function to create YOLOv8 model
+    Factory function to create YOLOv8 model with configurable backbone
+    
     Args:
         num_classes: Number of detection classes
         width_multiple: Width scaling factor
         depth_multiple: Depth scaling factor
+        backbone_name: Backbone network name. Options:
+            - 'CSPDarknet' (default, YOLO native)
+            - 'ResNet50', 'ResNet101'
+            - 'MobileNetV3'
+            - 'VGG16', 'VGG19'
+        backbone_pretrained: Whether to use ImageNet pretrained weights
+    
     Returns:
         YOLOv8 model
     """
     model = YOLOv8(
         num_classes=num_classes,
         width_multiple=width_multiple,
-        depth_multiple=depth_multiple
+        depth_multiple=depth_multiple,
+        backbone_name=backbone_name,
+        backbone_pretrained=backbone_pretrained
     )
     return model
 
 
+def list_supported_backbones():
+    """
+    Print all supported backbone networks
+    """
+    print("Supported backbone networks:")
+    for name in list_backbones():
+        info = get_backbone_info(name)
+        print(f"  - {info.get('name', name)}: {info.get('params', 'N/A')} params, "
+              f"channels {info.get('out_channels', 'N/A')}")
+
+
 if __name__ == '__main__':
-    model = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67)
+    # List supported backbones
+    list_supported_backbones()
     
+    # Test with default backbone
+    print("\n--- Testing CSPDarknet backbone ---")
+    model = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67, 
+                        backbone_name='CSPDarknet')
     x = torch.randn(2, 3, 640, 640)
     cls_outputs, box_outputs, anchor_points, anchor_strides = model.predict(x)
-    
     print(f"Input shape: {x.shape}")
     print(f"Classification outputs shape: {cls_outputs.shape}")
     print(f"Box outputs shape: {box_outputs.shape}")
-    print(f"Anchor points shape: {anchor_points.shape}")
-    print(f"Anchor strides shape: {anchor_strides.shape}")
+    print(f"Backbone: {model.backbone_name}")
+    print(f"Backbone out channels: {model.backbone.out_channels}")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
-    print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.2f}M")
+    
+    # Test with ResNet50 backbone (without pretrained for faster testing)
+    print("\n--- Testing ResNet50 backbone ---")
+    model_resnet = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67,
+                                backbone_name='ResNet50', backbone_pretrained=False)
+    cls_outputs, box_outputs, anchor_points, anchor_strides = model_resnet.predict(x)
+    print(f"Backbone: {model_resnet.backbone_name}")
+    print(f"Backbone out channels: {model_resnet.backbone.out_channels}")
+    print(f"Total parameters: {sum(p.numel() for p in model_resnet.parameters()) / 1e6:.2f}M")

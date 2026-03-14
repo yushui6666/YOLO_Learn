@@ -14,9 +14,18 @@ pyyaml>=6.0
 tensorboard>=2.14.0
 tqdm>=4.66.0
 
+# 超参数调优
+optuna>=3.5.0
+
 # 评估工具
 pycocotools>=2.0.7
 
-# 可选：加速库（如果需要）
-# nvidia-dali-cuda110>=1.30.0  # NVIDIA DALI for data loading
-# apex>=0.9.10dev  # NVIDIA Apex for mixed precision training
+# ONNX 导出和推理
+onnx>=1.14.0
+onnxruntime>=1.16.0
+
+# 系统监控
+psutil>=5.9.0
+
+# 可视化
+matplotlib>=3.7.0
