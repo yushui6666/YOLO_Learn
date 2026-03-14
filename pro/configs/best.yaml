@@ -314,7 +314,7 @@ evaluation:
   # 模型权重路径：要评估的模型权重文件
   # 示例：'runs/train/best_model.pt', 'weights/yolov8s.pt'
   # 说明：支持训练保存的检查点或导出的权重文件
-  weights: 'runs/train/best_model.pt'
+  weights: 'zhengliu/teacher_model/yolo26x.pt'
   
   # 评估数据目录：评估使用的数据目录
   # 示例：'dataset/coco/val2017'

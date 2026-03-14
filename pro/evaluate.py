@@ -1,5 +1,6 @@
 """
-YOLOv8 评估脚本
+YOLOv8 评估脚本 - 万金油版本
+支持多种模型格式：自定义 YOLOv8、Ultralytics YOLOv8、纯权重文件
 在数据集上评估模型性能，计算各项检测指标
 """
 
@@ -12,7 +13,7 @@ import numpy as np
 import torch
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import json
 
 # 添加项目根目录到路径
@@ -24,8 +25,212 @@ from data.dataset import create_dataloader
 from utils.metrics import MetricsCalculator
 
 
+def detect_model_format(weights_path: str) -> str:
+    """
+    检测模型权重文件的格式
+    
+    返回:
+        'ultralytics': Ultralytics 官方格式
+        'custom': 自定义 YOLOv8 格式（包含 model_state_dict）
+        'pure_state_dict': 纯 state_dict 格式
+        'unknown': 未知格式
+    """
+    try:
+        checkpoint = torch.load(weights_path, map_location='cpu', weights_only=False)
+        
+        # Ultralytics 格式特征键
+        ultralytics_keys = {'date', 'version', 'license', 'docs', 'epoch', 
+                          'best_fitness', 'ema', 'updates', 'optimizer', 
+                          'scaler', 'train_args', 'train_metrics', 'train_results', 'git'}
+        
+        checkpoint_keys = set(checkpoint.keys()) if isinstance(checkpoint, dict) else set()
+        
+        # 检查是否是字典类型
+        if not isinstance(checkpoint, dict):
+            return 'unknown'
+        
+        # 1. 首先检查是否是自定义格式（包含 model_state_dict）
+        if 'model_state_dict' in checkpoint:
+            return 'custom'
+        
+        # 2. 检查是否是 Ultralytics 格式
+        # Ultralytics 格式通常包含 'model' 键，里面是实际的权重
+        if 'model' in checkpoint:
+            model_data = checkpoint['model']
+            if isinstance(model_data, dict):
+                # 检查是否有 Ultralytics 特有的元数据
+                if any(k in checkpoint_keys for k in ['date', 'version', 'license', 'git']):
+                    return 'ultralytics'
+                # 检查 model 键的内容结构
+                model_keys = set(model_data.keys()) if isinstance(model_data, dict) else set()
+                # Ultralytics 的 model 通常包含浮点型键（锚框相关）或特定的层名
+                if any(isinstance(k, float) for k in model_keys):
+                    return 'ultralytics'
+                # 如果 model 中包含大量的张量值，也可能是 Ultralytics 格式
+                tensor_count = sum(1 for v in model_data.values() if torch.is_tensor(v))
+                if tensor_count > 100:  # 典型的 YOLO 模型有很多层
+                    return 'ultralytics'
+        
+        # 3. 检查是否是纯 state_dict 格式
+        # 如果所有键都是字符串且看起来像层名（包含 '.' 或者是常见的层名前缀）
+        if len(checkpoint_keys) > 0:
+            if not any(k in ultralytics_keys for k in checkpoint_keys):
+                # 检查是否看起来像 state_dict
+                sample_keys = list(checkpoint_keys)[:5]
+                if all(isinstance(k, str) and ('.' in k or 'weight' in k.lower() or 'bias' in k.lower()) 
+                       for k in sample_keys):
+                    return 'pure_state_dict'
+        
+        return 'unknown'
+        
+    except Exception as e:
+        print(f"Error detecting model format: {e}")
+        return 'unknown'
+
+
+class CustomModelWrapper:
+    """自定义 YOLOv8 模型包装器"""
+    
+    def __init__(self, model: torch.nn.Module, config: Dict, device: torch.device):
+        self.model = model
+        self.config = config
+        self.device = device
+    
+    def eval(self):
+        self.model.eval()
+    
+    @torch.no_grad()
+    def __call__(self, images: torch.Tensor) -> torch.Tensor:
+        return self.model(images)
+    
+    def decode_predictions(self, outputs: torch.Tensor, img_h: int, img_w: int, 
+                          conf_thres: float) -> List[np.ndarray]:
+        return self.model.decode_predictions(
+            outputs, img_h=img_h, img_w=img_w, conf_thres=conf_thres
+        )
+
+
+class UltralyticsModelWrapper:
+    """Ultralytics YOLOv8 模型包装器 - 使用官方 API 进行推理"""
+    
+    def __init__(self, weights_path: str, device: torch.device):
+        try:
+            from ultralytics import YOLO
+            self.model = YOLO(weights_path)
+        except ImportError:
+            raise ImportError("Please install ultralytics: pip install ultralytics")
+        
+        self.device = device
+        self.model.to(device)
+    
+    def eval(self):
+        self.model.eval()
+    
+    @torch.no_grad()
+    def __call__(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        使用 Ultralytics 模型进行推理
+        输入：batched images [N, C, H, W]
+        输出：处理后的张量，格式与自定义模型兼容
+        """
+        # Ultralytics 模型的输入需要是特定格式
+        # 这里我们使用 model.model 来获取原始输出
+        if hasattr(self.model, 'model'):
+            # 获取模型的前向传播输出
+            # Ultralytics 模型内部使用 [N, C, H, W] 格式
+            outputs = self.model.model(images)
+            return outputs
+        else:
+            raise NotImplementedError("Direct inference not supported for this model")
+    
+    def decode_predictions(self, outputs: torch.Tensor, img_h: int, img_w: int, 
+                          conf_thres: float) -> List[np.ndarray]:
+        """
+        解码 Ultralytics 模型输出
+        返回：List[np.ndarray], 每个元素是 [N, 6] 数组 [x1, y1, x2, y2, conf, cls]
+        
+        Ultralytics YOLOv8 输出格式：[batch, 84, num_boxes]
+        84 = 4 (bbox: cx, cy, w, h) + 80 (classes)
+        """
+        predictions = []
+        
+        # 处理输出格式
+        if isinstance(outputs, (list, tuple)):
+            outputs = outputs[0] if len(outputs) > 0 and torch.is_tensor(outputs[0]) else outputs
+        
+        if not torch.is_tensor(outputs):
+            return [np.array([]).reshape(0, 6)]
+        
+        # 确保是 3D 张量 [batch, 84, num_boxes]
+        if len(outputs.shape) == 2:
+            outputs = outputs.unsqueeze(0)
+        
+        batch_size = outputs.shape[0]
+        
+        for i in range(batch_size):
+            pred = outputs[i]  # [84, num_boxes]
+            
+            if len(pred.shape) != 2:
+                predictions.append(np.array([]).reshape(0, 6))
+                continue
+            
+            # 转置为 [num_boxes, 84]
+            pred = pred.transpose(0, 1)
+            
+            # 分离 bbox (cx, cy, w, h) 和类别分数
+            boxes = pred[:, :4]  # [num_boxes, 4] - 中心点格式
+            scores_cls = pred[:, 4:]  # [num_boxes, 80]
+            
+            # 计算每个框的最大类别分数和索引
+            max_scores, max_cls = torch.max(scores_cls, dim=1)
+            
+            # 过滤低置信度
+            valid_mask = max_scores >= conf_thres
+            valid_boxes = boxes[valid_mask]
+            valid_scores = max_scores[valid_mask]
+            valid_cls = max_cls[valid_mask]
+            
+            if len(valid_boxes) == 0:
+                predictions.append(np.array([]).reshape(0, 6))
+                continue
+            
+            # 转换坐标格式：从中心点 (cx, cy, w, h) 到角点 (x1, y1, x2, y2)
+            # Ultralytics 使用归一化坐标 (0-1)
+            xyxy_boxes = torch.zeros_like(valid_boxes)
+            xyxy_boxes[:, 0] = (valid_boxes[:, 0] - valid_boxes[:, 2] / 2) * img_w  # x1
+            xyxy_boxes[:, 1] = (valid_boxes[:, 1] - valid_boxes[:, 3] / 2) * img_h  # y1
+            xyxy_boxes[:, 2] = (valid_boxes[:, 0] + valid_boxes[:, 2] / 2) * img_w  # x2
+            xyxy_boxes[:, 3] = (valid_boxes[:, 1] + valid_boxes[:, 3] / 2) * img_h  # y2
+            
+            # 应用 NMS
+            try:
+                from torchvision.ops import nms
+                keep = nms(xyxy_boxes, valid_scores, iou_threshold=0.45)
+                
+                result = torch.cat([
+                    xyxy_boxes[keep],
+                    valid_scores[keep:keep.numel()].unsqueeze(1),
+                    valid_cls[keep:keep.numel()].unsqueeze(1).float()
+                ], dim=1)
+                predictions.append(result.cpu().numpy())
+            except ImportError:
+                # 没有 torchvision，不使用 NMS
+                result = torch.cat([
+                    xyxy_boxes,
+                    valid_scores.unsqueeze(1),
+                    valid_cls.unsqueeze(1).float()
+                ], dim=1)
+                predictions.append(result.cpu().numpy())
+        
+        # 如果 batch_size 为 0
+        if batch_size == 0:
+            predictions.append(np.array([]).reshape(0, 6))
+        
+        return predictions
+
+
 class Evaluator:
-    """YOLOv8 评估器"""
+    """YOLOv8 评估器 - 支持多种模型格式"""
     
     def __init__(self, config: Dict, args: argparse.Namespace):
         self.config = config
@@ -40,19 +245,24 @@ class Evaluator:
         self.image_size = config['training']['image_size']
         self.num_workers = config['training']['num_workers']
         
-        # 创建模型
-        print("Loading model...")
-        self.model = create_model(
-            num_classes=config['model']['num_classes'],
-            width_multiple=config['model']['width_multiple'],
-            depth_multiple=config['model']['depth_multiple'],
-            backbone_name=config['model'].get('backbone_name', 'CSPDarknet'),
-            backbone_pretrained=config['model'].get('backbone_pretrained', False)
-        )
-        self.model = self.model.to(self.device)
+        # 检测模型格式
+        model_format = detect_model_format(args.weights)
+        print(f"Detected model format: {model_format}")
         
-        # 加载权重
-        self.load_weights(args.weights)
+        # 根据模型类型加载模型
+        if args.model_type == 'auto':
+            self.model_type = model_format
+        else:
+            self.model_type = args.model_type
+        
+        # 创建模型包装器
+        print("Loading model...")
+        self.model = self._load_model(args.weights, model_format)
+        self.model.eval()
+        
+        # 加载权重（如果需要）
+        if model_format == 'custom':
+            self.load_weights(args.weights)
         
         # 创建数据加载器
         print("Creating data loader...")
@@ -79,8 +289,40 @@ class Evaluator:
         # 类别名称（从数据集获取）
         self.class_names = getattr(self.dataloader.dataset, 'class_names', [f'Class_{i}' for i in range(config['model']['num_classes'])])
     
+    def _load_model(self, weights_path: str, model_format: str) -> Any:
+        """根据模型格式加载模型"""
+        
+        if model_format == 'ultralytics':
+            # 使用 Ultralytics 模型
+            return UltralyticsModelWrapper(weights_path, self.device)
+        
+        elif model_format in ('custom', 'pure_state_dict'):
+            # 使用自定义模型
+            model = create_model(
+                num_classes=self.config['model']['num_classes'],
+                width_multiple=self.config['model']['width_multiple'],
+                depth_multiple=self.config['model']['depth_multiple'],
+                backbone_name=self.config['model'].get('backbone_name', 'CSPDarknet'),
+                backbone_pretrained=self.config['model'].get('backbone_pretrained', False)
+            )
+            model = model.to(self.device)
+            return CustomModelWrapper(model, self.config, self.device)
+        
+        else:
+            # 未知格式，尝试作为自定义模型加载
+            print("Unknown model format, trying to load as custom model...")
+            model = create_model(
+                num_classes=self.config['model']['num_classes'],
+                width_multiple=self.config['model']['width_multiple'],
+                depth_multiple=self.config['model']['depth_multiple'],
+                backbone_name=self.config['model'].get('backbone_name', 'CSPDarknet'),
+                backbone_pretrained=self.config['model'].get('backbone_pretrained', False)
+            )
+            model = model.to(self.device)
+            return CustomModelWrapper(model, self.config, self.device)
+    
     def load_weights(self, weights_path: str):
-        """加载模型权重"""
+        """加载模型权重（仅用于自定义格式）"""
         if not os.path.exists(weights_path):
             raise FileNotFoundError(f"Weights file not found: {weights_path}")
         
@@ -90,14 +332,29 @@ class Evaluator:
         # 处理不同的权重格式
         if 'model_state_dict' in checkpoint:
             # 完整检查点
-            self.model.load_state_dict(checkpoint['model_state_dict'])
+            if isinstance(self.model, CustomModelWrapper):
+                self.model.model.load_state_dict(checkpoint['model_state_dict'])
             if 'epoch' in checkpoint:
                 print(f"Checkpoint epoch: {checkpoint['epoch']}")
             if 'metrics' in checkpoint:
                 print(f"Checkpoint metrics: {checkpoint['metrics']}")
+        elif 'model' in checkpoint:
+            # Ultralytics 格式，提取 model 部分
+            model_dict = checkpoint['model']
+            if isinstance(model_dict, dict):
+                # 过滤浮点型键（锚框）
+                filtered_dict = {k: v for k, v in model_dict.items() 
+                               if isinstance(k, str) and torch.is_tensor(v)}
+                if isinstance(self.model, CustomModelWrapper):
+                    try:
+                        self.model.model.load_state_dict(filtered_dict, strict=False)
+                        print("Loaded Ultralytics-style weights with strict=False")
+                    except Exception as e:
+                        print(f"Warning: Could not load Ultralytics weights: {e}")
         else:
-            # 仅模型权重
-            self.model.load_state_dict(checkpoint)
+            # 纯 state_dict
+            if isinstance(self.model, CustomModelWrapper):
+                self.model.model.load_state_dict(checkpoint)
         
         print("Weights loaded successfully")
     
@@ -122,7 +379,12 @@ class Evaluator:
             
             # 推理
             start_time = time.time()
-            outputs = self.model(images)
+            try:
+                outputs = self.model(images)
+            except Exception as e:
+                print(f"Error during inference: {e}")
+                continue
+            
             inference_time = time.time() - start_time
             inference_times.append(inference_time)
             
@@ -246,6 +508,7 @@ class Evaluator:
         results = {
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'model': self.args.weights,
+            'model_type': self.model_type,
             'dataset': self.args.data,
             'image_size': self.image_size,
             'config': self.args.config,
@@ -284,7 +547,7 @@ class Evaluator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='YOLOv8 Evaluation Script')
+    parser = argparse.ArgumentParser(description='YOLOv8 Evaluation Script - Universal Version')
     parser.add_argument('--config', type=str, default=os.path.join(SCRIPT_DIR, 'configs/best.yaml'),
                         help='Path to config file (default: configs/best.yaml)')
     parser.add_argument('--weights', type=str, default=None,
@@ -299,6 +562,9 @@ def main():
                         help='IoU threshold for NMS and evaluation (overrides config)')
     parser.add_argument('--cpu', action='store_true', default=None,
                         help='Force evaluation on CPU (overrides config)')
+    parser.add_argument('--model-type', type=str, default='auto',
+                        choices=['auto', 'custom', 'ultralytics', 'pure_state_dict'],
+                        help='Model type: auto (detect automatically), custom, ultralytics, or pure_state_dict')
     
     args = parser.parse_args()
     
@@ -326,6 +592,7 @@ def main():
     eval_args.conf_thres = args.conf_thres if args.conf_thres else config['evaluation'].get('conf_threshold', 0.001)
     eval_args.iou_thres = args.iou_thres if args.iou_thres else config['evaluation'].get('iou_threshold', 0.45)
     eval_args.cpu = args.cpu if args.cpu is not None else config['evaluation'].get('use_cpu', False)
+    eval_args.model_type = args.model_type
     
     # 创建评估器并执行评估
     evaluator = Evaluator(config, eval_args)
