@@ -1,12 +1,26 @@
+"""
+Detection Head for YOLOv8
+Uses standard convolution modules
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 # Handle both relative and absolute imports
 try:
-    from .backbone import Conv, autopad
+    from .backbone import Conv
 except ImportError:
-    from backbone import Conv, autopad
+    from backbone import Conv
+
+
+def autopad(k, p=None):
+    """
+    Auto padding for convolution
+    """
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
+    return p
 
 
 class DFL(nn.Module):
@@ -39,11 +53,11 @@ class DFL(nn.Module):
         return x
 
 
-
 class DetectHead(nn.Module):
     """
     Detection Head for YOLOv8
     Decoupled head with separate classification and regression branches
+    Uses standard convolution operations
     """
     def __init__(self, num_classes=None, in_channels=[256, 512, 1024], reg_max=16):
         super().__init__()
@@ -54,7 +68,7 @@ class DetectHead(nn.Module):
         self.reg_max = reg_max
         self.nc = num_classes
         
-        # Stems
+        # Stems - using standard Conv modules
         self.stems = nn.ModuleList([
             nn.Sequential(
                 Conv(x, x, 3, 1),
@@ -62,7 +76,7 @@ class DetectHead(nn.Module):
             ) for x in in_channels
         ])
         
-        # Classification branch
+        # Classification branch - using standard Conv modules
         self.cls_convs = nn.ModuleList([
             nn.Sequential(
                 Conv(x, x, 3, 1),
@@ -74,7 +88,7 @@ class DetectHead(nn.Module):
             nn.Conv2d(x, num_classes, 1) for x in in_channels
         ])
         
-        # Regression branch
+        # Regression branch - using standard Conv modules
         self.reg_convs = nn.ModuleList([
             nn.Sequential(
                 Conv(x, x, 3, 1),

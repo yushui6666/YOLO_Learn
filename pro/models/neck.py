@@ -1,11 +1,16 @@
+"""
+Neck Network for YOLOv8
+Uses standard convolution modules for feature fusion
+"""
+
 import torch
 import torch.nn as nn
 
 # Handle both relative and absolute imports
 try:
-    from .backbone import Conv, C2f, CBAM
+    from .backbone import Conv
 except ImportError:
-    from backbone import Conv, C2f, CBAM
+    from backbone import Conv
 
 
 class UpSample(nn.Module):
@@ -20,12 +25,52 @@ class UpSample(nn.Module):
         return self.upsample(x)
 
 
+class BottleneckBlock(nn.Module):
+    """
+    Standard bottleneck block (simplified ResNet-style)
+    Uses Conv-BN-SiLU structure
+    """
+    def __init__(self, in_channels, out_channels, shortcut=True):
+        super().__init__()
+        self.conv1 = Conv(in_channels, out_channels, 1, 1)
+        self.conv2 = Conv(out_channels, out_channels, 3, 1)
+        self.shortcut = shortcut and in_channels == out_channels
+
+    def forward(self, x):
+        identity = x
+        out = self.conv1(x)
+        out = self.conv2(out)
+        if self.shortcut:
+            out = out + identity
+        return out
+
+
+class CSPBlock(nn.Module):
+    """
+    CSP (Cross Stage Partial) block with standard convolutions
+    Replaces C2f with a simpler standard structure
+    """
+    def __init__(self, in_channels, out_channels, n=1, shortcut=True):
+        super().__init__()
+        self.c_ = out_channels // 2
+        self.cv1 = Conv(in_channels, 2 * self.c_, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c_, out_channels, 1, 1)
+        self.m = nn.ModuleList(BottleneckBlock(self.c_, self.c_, shortcut) for _ in range(n))
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c_, self.c_), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
 class PANet(nn.Module):
     """
     Path Aggregation Network (PANet) neck for YOLOv8
     Supports automatic channel adaptation for different backbones
+    
+    Uses standard convolution operations without custom attention modules
     """
-    def __init__(self, in_channels, width_multiple=1.0, depth_multiple=1.0, use_cbam=True):
+    def __init__(self, in_channels, width_multiple=1.0, depth_multiple=1.0, use_cbam=False):
         super().__init__()
         
         # Calculate channels based on width_multiple
@@ -55,29 +100,26 @@ class PANet(nn.Module):
         # P5 -> P4
         self.up1 = UpSample(scale_factor=2)
         self.h1 = Conv(target_c5 + target_c4, target_c4, 1, 1)
-        self.c2f_1 = C2f(target_c4, target_c4, n=make_n(3))
+        self.c2f_1 = CSPBlock(target_c4, target_c4, n=make_n(3))
         
         # P4 -> P3
         self.up2 = UpSample(scale_factor=2)
         self.h2 = Conv(target_c4 + target_c3, target_c3, 1, 1)
-        self.c2f_2 = C2f(target_c3, target_c3, n=make_n(3))
+        self.c2f_2 = CSPBlock(target_c3, target_c3, n=make_n(3))
         
         # Bottom-up pathway
         # P3 -> P4
         self.down1 = nn.Conv2d(target_c3, target_c3, 3, 2, padding=1)
         self.h3 = Conv(target_c3 + target_c4, target_c4, 1, 1)
-        self.c2f_3 = C2f(target_c4, target_c4, n=make_n(3))
+        self.c2f_3 = CSPBlock(target_c4, target_c4, n=make_n(3))
         
         # P4 -> P5
         self.down2 = nn.Conv2d(target_c4, target_c4, 3, 2, padding=1)
         self.h4 = Conv(target_c4 + target_c5, target_c5, 1, 1)
-        self.c2f_4 = C2f(target_c5, target_c5, n=make_n(3))
+        self.c2f_4 = CSPBlock(target_c5, target_c5, n=make_n(3))
         
-        # CBAM modules for P4 and P5 feature enhancement
-        self.use_cbam = use_cbam
-        if use_cbam:
-            self.cbam_p4 = CBAM(target_c4)
-            self.cbam_p5 = CBAM(target_c5)
+        # Note: CBAM is disabled - using standard convolutions only
+        self.use_cbam = False
         
         # Output channels
         self.out_channels = [target_c3, target_c4, target_c5]
@@ -122,11 +164,6 @@ class PANet(nn.Module):
         p4_down_cat = torch.cat([p4_down, p5], dim=1)
         p4_down_cat = self.h4(p4_down_cat)
         p5_bu = self.c2f_4(p4_down_cat)
-        
-        # Apply CBAM to enhance P4 and P5 features
-        if self.use_cbam:
-            p4_bu = self.cbam_p4(p4_bu)
-            p5_bu = self.cbam_p5(p5_bu)
         
         return [p3_td, p4_bu, p5_bu]
 

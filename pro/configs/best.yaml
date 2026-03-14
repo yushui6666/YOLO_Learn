@@ -10,16 +10,17 @@ model:
   num_classes: 80
   
   # 骨干网络名称：选择不同的骨干网络
+  # 所有骨干网络均使用 torchvision 标准实现，支持 ImageNet 预训练权重
   # 可选值：
-  #   - 'CSPDarknet' (默认，YOLO原生骨干网络，平衡性能和速度)
-  #   - 'ResNet50' (经典残差网络，适合迁移学习)
-  #   - 'ResNet101' (更深的ResNet，精度更高但速度更慢)
+  #   - 'ResNet50' (默认，经典残差网络，适合迁移学习)
+  #   - 'ResNet101' (更深的 ResNet，精度更高但速度更慢)
   #   - 'MobileNetV3' (轻量级，适合移动端部署)
-  #   - 'VGG16' (经典VGG网络，结构简单)
-  #   - 'VGG19' (更深的VGG网络)
+  #   - 'VGG16' (经典 VGG 网络，结构简单)
+  #   - 'VGG19' (更深的 VGG 网络)
+  #   - 'EfficientNet' (高效复合缩放网络)
   # 说明：不同骨干网络有不同的参数量和计算复杂度
   # 调优：根据任务需求和硬件条件选择合适的骨干网络
-  backbone_name: 'ResNet50'
+  backbone_name: 'VGG19'
   
   # 是否使用预训练权重（仅对ResNet、MobileNetV3、VGG有效）
   # 推荐：true (利用ImageNet预训练加速收敛), false (从头训练)
@@ -27,17 +28,17 @@ model:
   # 调优：数据量小时建议开启，数据量大时可以尝试从头训练
   backbone_pretrained: false
   
-  # 宽度缩放因子：控制模型每一层的通道数
+  # 宽度缩放因子：控制 neck 和 head 部分的通道数
   # 推荐：0.25 (nano), 0.5 (small), 1.0 (medium), 1.5 (large), 2.0 (extra large)
   # 说明：值越大模型越宽，参数量越多，精度通常更高但速度更慢
-  # 调优：根据计算资源和精度需求选择，1.0为标准YOLOv8m配置
-  width_multiple: 0.25
+  # 调优：根据计算资源和精度需求选择，1.0 为标准配置
+  width_multiple: 0.5
   
-  # 深度缩放因子：控制模型层数的深度
+  # 深度缩放因子：控制 neck 和 head 部分的深度
   # 推荐：0.33 (nano), 0.33 (small), 0.67 (medium), 1.0 (large), 1.33 (extra large)
   # 说明：值越大模型越深，参数量越多，表达能力更强但训练更慢
-  # 调优：通常与width_multiple配合使用，保持模型比例协调
-  depth_multiple: 0.33
+  # 调优：通常与 width_multiple 配合使用，保持模型比例协调
+  depth_multiple: 0.67
 
 # ==================== 训练参数 ====================
 # 控制训练过程的基本设置

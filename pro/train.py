@@ -89,12 +89,33 @@ class Trainer:
         
         # 创建模型
         print("正在创建模型...")
+        
+        # 获取骨干网络配置
+        backbone_name = config['model'].get('backbone_name', 'ResNet50')
+        backbone_pretrained = config['model'].get('backbone_pretrained', False)
+        
         self.model = create_model(
             num_classes=config['model']['num_classes'],
             width_multiple=config['model']['width_multiple'],
-            depth_multiple=config['model']['depth_multiple']
+            depth_multiple=config['model']['depth_multiple'],
+            backbone_name=backbone_name,
+            backbone_pretrained=backbone_pretrained
         )
         self.model = self.model.to(self.device)
+        
+        # 打印网络信息
+        print("\n" + "="*50)
+        print("模型架构信息")
+        print("="*50)
+        print(f"骨干网络：{backbone_name}")
+        print(f"预训练权重：{'是' if backbone_pretrained else '否'}")
+        print(f"宽度缩放因子：{config['model']['width_multiple']}")
+        print(f"深度缩放因子：{config['model']['depth_multiple']}")
+        print(f"类别数：{config['model']['num_classes']}")
+        print(f"输入尺寸：{config['training']['image_size']}x{config['training']['image_size']}")
+        print(f"总参数量：{sum(p.numel() for p in self.model.parameters()) / 1e6:.2f}M")
+        print(f"可训练参数量：{sum(p.numel() for p in self.model.parameters() if p.requires_grad) / 1e6:.2f}M")
+        print("="*50 + "\n")
         
         # 创建损失函数
         print("正在创建损失函数...")

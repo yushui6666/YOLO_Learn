@@ -1,15 +1,18 @@
+"""
+YOLOv8 Model
+Uses standard backbone networks from torchvision
+"""
+
 import torch
 import torch.nn as nn
 from torchvision.ops import nms
 
 # Handle both relative and absolute imports
 try:
-    from .backbone import CSPDarknet
     from .backbone_utils import build_backbone, list_backbones, get_backbone_info
     from .neck import PANet
     from .head import DetectHead
 except ImportError:
-    from backbone import CSPDarknet
     from backbone_utils import build_backbone, list_backbones, get_backbone_info
     from neck import PANet
     from head import DetectHead
@@ -17,11 +20,12 @@ except ImportError:
 
 class YOLOv8(nn.Module):
     """
-    Complete YOLOv8 model with backbone, neck, and head
-    Supports multiple backbone networks with seamless switching
+    YOLOv8 model with standard backbone networks
+    Supports ResNet, MobileNetV3, VGG, and EfficientNet backbones
+    All backbones use standard torchvision implementations
     """
     def __init__(self, num_classes=80, width_multiple=1.0, depth_multiple=1.0, 
-                 backbone_name='CSPDarknet', backbone_pretrained=False):
+                 backbone_name='ResNet50', backbone_pretrained=False):
         super().__init__()
         
         self.num_classes = num_classes
@@ -29,22 +33,14 @@ class YOLOv8(nn.Module):
         self.depth_multiple = depth_multiple
         self.backbone_name = backbone_name
         
-        # Backbone - support multiple backbone types
-        if backbone_name.lower() in ['cspdarknet', 'yolo', 'yolov8']:
-            self.backbone = CSPDarknet(
-                in_channels=3,
-                width_multiple=width_multiple,
-                depth_multiple=depth_multiple
-            )
-        else:
-            # Use factory function for other backbones
-            self.backbone = build_backbone(
-                backbone_name=backbone_name,
-                in_channels=3,
-                width_multiple=width_multiple,
-                depth_multiple=depth_multiple,
-                pretrained=backbone_pretrained
-            )
+        # Backbone - use factory function for all backbones
+        self.backbone = build_backbone(
+            backbone_name=backbone_name,
+            in_channels=3,
+            width_multiple=width_multiple,
+            depth_multiple=depth_multiple,
+            pretrained=backbone_pretrained
+        )
         
         # Neck - automatically adapts to backbone output channels
         self.neck = PANet(
@@ -103,8 +99,6 @@ class YOLOv8(nn.Module):
         
         return cls_outputs, box_outputs, anchor_points, anchor_strides
 
-
-    
     def decode_predictions(self, outputs, img_h=640, img_w=640, conf_thres=0.001):
         """
         Decode model outputs to predictions
@@ -120,7 +114,7 @@ class YOLOv8(nn.Module):
         cls_outputs, box_outputs = outputs   # cls: (B, C, N), box: (B, 4*R, N)
         batch_size = cls_outputs.shape[0]
 
-        # 生成 anchor 坐标和对应 stride（与 loss.py 保持一致）
+        # Generate anchor coordinates and corresponding strides
         anchor_points, anchor_strides = self._make_anchors(
             batch_size, img_h, img_w, device=cls_outputs.device
         )  # anchor_points: (B, N, 2), anchor_strides: (B, N)
@@ -131,10 +125,10 @@ class YOLOv8(nn.Module):
             cls_scores = cls_outputs[i].permute(1, 0)  # (N, num_classes)
             cls_probs = torch.sigmoid(cls_scores)
 
-            # 找到每个 anchor 的最大类别及其得分
+            # Find max class and its score for each anchor
             max_scores, max_classes = cls_probs.max(dim=1)  # (N,), (N,)
 
-            # 置信度过滤
+            # Confidence threshold filtering
             mask = max_scores > conf_thres  # (N,)
             if mask.sum() == 0:
                 predictions.append(torch.zeros((0, 6), device=cls_outputs.device))
@@ -143,21 +137,21 @@ class YOLOv8(nn.Module):
             scores = max_scores[mask]             # (N_f,)
             classes = max_classes[mask].float()   # (N_f,)
 
-            # DFL 积分：box_outputs[i] 是 (4*R, N)
+            # DFL integration: box_outputs[i] is (4*R, N)
             box_dist = box_outputs[i].view(4, self.head.reg_max, -1).permute(2, 0, 1)  # (N, 4, R)
             box_dist_filtered = box_dist[mask]  # (N_f, 4, R)
 
             box_dist_softmax = box_dist_filtered.softmax(-1)  # (N_f, 4, R)
             proj = torch.arange(self.head.reg_max, dtype=torch.float32,
                                 device=box_outputs.device).view(1, 1, -1)
-            # 得到 ltrb，单位是 stride
+            # Get ltrb in stride units
             boxes_integrated = (box_dist_softmax * proj).sum(-1)  # (N_f, 4)
 
-            # 取出对应的 anchor 坐标和 stride
+            # Get corresponding anchor coordinates and stride
             anchor_pts = anchor_points[i][mask]                 # (N_f, 2)
             strides = anchor_strides[i][mask].unsqueeze(1)      # (N_f, 1)
 
-            # stride 单位距离 -> 像素距离
+            # Convert stride units to pixel units
             dist_pixels = boxes_integrated * strides            # (N_f, 4)
 
             # boxes_integrated: [dl, dt, dr, db]
@@ -165,21 +159,19 @@ class YOLOv8(nn.Module):
             rb = anchor_pts + dist_pixels[:, 2:]                # (N_f, 2)
             decoded_boxes = torch.cat([lt, rb], dim=-1)         # (N_f, 4) [x1,y1,x2,y2]
 
-            # --- 加一个简单的 class-agnostic NMS，减少重复框 ---
+            # Apply class-agnostic NMS to reduce duplicate boxes
             if decoded_boxes.numel() == 0:
                 predictions.append(torch.zeros((0, 6), device=cls_outputs.device))
                 continue
 
-            # 这里使用类无关 NMS：不区分类别，只按 box + score 去重
             nms_iou_thres = 0.5
             keep = nms(decoded_boxes, scores, nms_iou_thres)
 
             decoded_boxes = decoded_boxes[keep]
             scores = scores[keep]
             classes = classes[keep]
-            # --- NMS 结束 ---
 
-            # 拼成最终输出: [x1, y1, x2, y2, score, class]
+            # Final output: [x1, y1, x2, y2, score, class]
             pred = torch.cat(
                 [decoded_boxes, scores.unsqueeze(1), classes.unsqueeze(1)],
                 dim=1
@@ -187,7 +179,6 @@ class YOLOv8(nn.Module):
             predictions.append(pred)
         return predictions
 
-    
     def _make_anchors(self, batch_size, img_h, img_w, device=None):
         if device is None:
             device = next(self.parameters()).device
@@ -203,7 +194,7 @@ class YOLOv8(nn.Module):
             x = torch.arange(w, dtype=torch.float32, device=device)
             grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
 
-            # cell centers
+            # Cell centers
             anchor_points = torch.stack(
                 [grid_x + 0.5, grid_y + 0.5], dim=-1
             ) * stride
@@ -224,7 +215,6 @@ class YOLOv8(nn.Module):
 
         return anchor_points, anchor_strides
 
-    
     def load_weights(self, weights_path):
         """
         Load pre-trained weights
@@ -269,19 +259,19 @@ class YOLOv8(nn.Module):
 
 
 def create_model(num_classes=None, width_multiple=None, depth_multiple=None, 
-                 backbone_name='CSPDarknet', backbone_pretrained=False):
+                 backbone_name='ResNet50', backbone_pretrained=False):
     """
-    Factory function to create YOLOv8 model with configurable backbone
+    Factory function to create YOLOv8 model with standard backbone
     
     Args:
         num_classes: Number of detection classes
         width_multiple: Width scaling factor
         depth_multiple: Depth scaling factor
         backbone_name: Backbone network name. Options:
-            - 'CSPDarknet' (default, YOLO native)
-            - 'ResNet50', 'ResNet101'
-            - 'MobileNetV3'
-            - 'VGG16', 'VGG19'
+            - 'ResNet50', 'ResNet101' (classic residual networks)
+            - 'MobileNetV3' (lightweight for mobile)
+            - 'VGG16', 'VGG19' (classic VGG)
+            - 'EfficientNet' (efficient compound scaling)
         backbone_pretrained: Whether to use ImageNet pretrained weights
     
     Returns:
@@ -312,10 +302,10 @@ if __name__ == '__main__':
     # List supported backbones
     list_supported_backbones()
     
-    # Test with default backbone
-    print("\n--- Testing CSPDarknet backbone ---")
-    model = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67, 
-                        backbone_name='CSPDarknet')
+    # Test with ResNet50 backbone (without pretrained for faster testing)
+    print("\n--- Testing ResNet50 backbone ---")
+    model = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67,
+                         backbone_name='ResNet50', backbone_pretrained=False)
     x = torch.randn(2, 3, 640, 640)
     cls_outputs, box_outputs, anchor_points, anchor_strides = model.predict(x)
     print(f"Input shape: {x.shape}")
@@ -325,11 +315,11 @@ if __name__ == '__main__':
     print(f"Backbone out channels: {model.backbone.out_channels}")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
     
-    # Test with ResNet50 backbone (without pretrained for faster testing)
-    print("\n--- Testing ResNet50 backbone ---")
-    model_resnet = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67,
-                                backbone_name='ResNet50', backbone_pretrained=False)
-    cls_outputs, box_outputs, anchor_points, anchor_strides = model_resnet.predict(x)
-    print(f"Backbone: {model_resnet.backbone_name}")
-    print(f"Backbone out channels: {model_resnet.backbone.out_channels}")
-    print(f"Total parameters: {sum(p.numel() for p in model_resnet.parameters()) / 1e6:.2f}M")
+    # Test with MobileNetV3 backbone
+    print("\n--- Testing MobileNetV3 backbone ---")
+    model = create_model(num_classes=80, width_multiple=0.5, depth_multiple=0.67,
+                         backbone_name='MobileNetV3', backbone_pretrained=False)
+    cls_outputs, box_outputs, anchor_points, anchor_strides = model.predict(x)
+    print(f"Backbone: {model.backbone_name}")
+    print(f"Backbone out channels: {model.backbone.out_channels}")
+    print(f"Total parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")

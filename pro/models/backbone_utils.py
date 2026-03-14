@@ -1,6 +1,8 @@
 """
 Backbone Utilities for YOLOv8
-Provides unified interface and factory functions for different backbone networks
+Provides unified interface and factory functions for standard backbone networks
+
+All backbones use standard torchvision implementations
 """
 
 import torch
@@ -69,11 +71,11 @@ def build_backbone(
     Factory function to create backbone networks
     
     Args:
-        backbone_name: Name of backbone ('CSPDarknet', 'ResNet50', 'ResNet101', 
-                                       'MobileNetV3', 'VGG16', 'VGG19')
+        backbone_name: Name of backbone ('ResNet50', 'ResNet101', 
+                                       'MobileNetV3', 'VGG16', 'VGG19', 'EfficientNet')
         in_channels: Number of input channels
-        width_multiple: Width scaling factor (for CSPDarknet)
-        depth_multiple: Depth scaling factor (for CSPDarknet)
+        width_multiple: Width scaling factor (for neck/head)
+        depth_multiple: Depth scaling factor (for neck/head)
         pretrained: Whether to use ImageNet pretrained weights
         **kwargs: Additional arguments for specific backbones
     
@@ -87,23 +89,16 @@ def build_backbone(
     # Import here to avoid circular imports
     try:
         from .backbone import (
-            CSPDarknet, ResNetBackbone, MobileNetV3Backbone, VGGBackbone
+            ResNetBackbone, MobileNetV3Backbone, VGGBackbone, EfficientNetBackbone
         )
     except ImportError:
         from backbone import (
-            CSPDarknet, ResNetBackbone, MobileNetV3Backbone, VGGBackbone
+            ResNetBackbone, MobileNetV3Backbone, VGGBackbone, EfficientNetBackbone
         )
     
     backbone_name = backbone_name.lower()
     
-    if backbone_name in ['cspdarknet', 'yolo', 'yolov8']:
-        return CSPDarknet(
-            in_channels=in_channels,
-            width_multiple=width_multiple,
-            depth_multiple=depth_multiple
-        )
-    
-    elif backbone_name in ['resnet50', 'resnet-50', 'resnet_50']:
+    if backbone_name in ['resnet50', 'resnet-50', 'resnet_50']:
         return ResNetBackbone(
             model_name='resnet50',
             in_channels=in_channels,
@@ -137,10 +132,18 @@ def build_backbone(
             pretrained=pretrained
         )
     
+    elif backbone_name in ['efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2', 
+                           'efficientnet_b3', 'efficientnet_b4', 'efficientnet']:
+        return EfficientNetBackbone(
+            model_name=backbone_name.lower(),
+            in_channels=in_channels,
+            pretrained=pretrained
+        )
+    
     else:
         raise ValueError(
             f"Unknown backbone: {backbone_name}. "
-            f"Supported: CSPDarknet, ResNet50, ResNet101, MobileNetV3, VGG16, VGG19"
+            f"Supported: ResNet50, ResNet101, MobileNetV3, VGG16, VGG19, EfficientNet"
         )
 
 
@@ -149,10 +152,10 @@ def list_backbones() -> List[str]:
     Return list of supported backbone names
     """
     return [
-        'CSPDarknet',
         'ResNet50', 'ResNet101',
         'MobileNetV3',
-        'VGG16', 'VGG19'
+        'VGG16', 'VGG19',
+        'EfficientNet'
     ]
 
 
@@ -167,17 +170,11 @@ def get_backbone_info(backbone_name: str) -> dict:
         Dictionary with backbone information
     """
     info = {
-        'cspdarknet': {
-            'name': 'CSPDarknet',
-            'params': '~11M',
-            'out_channels': [256, 512, 1024],
-            'description': 'YOLO native backbone, high accuracy'
-        },
         'resnet50': {
             'name': 'ResNet50',
             'params': '~25M',
             'out_channels': [512, 1024, 2048],
-            'description': 'Classic backbone, rich pretrained weights'
+            'description': 'Classic residual network, rich pretrained weights'
         },
         'resnet101': {
             'name': 'ResNet101',
@@ -202,6 +199,36 @@ def get_backbone_info(backbone_name: str) -> dict:
             'params': '~144M',
             'out_channels': [256, 512, 512],
             'description': 'Deeper VGG, more features'
+        },
+        'efficientnet_b0': {
+            'name': 'EfficientNet-B0',
+            'params': '~5M',
+            'out_channels': [40, 112, 1280],
+            'description': 'Efficient compound scaling network'
+        },
+        'efficientnet_b1': {
+            'name': 'EfficientNet-B1',
+            'params': '~8M',
+            'out_channels': [40, 112, 1280],
+            'description': 'Larger EfficientNet variant'
+        },
+        'efficientnet_b2': {
+            'name': 'EfficientNet-B2',
+            'params': '~9M',
+            'out_channels': [48, 120, 1408],
+            'description': 'EfficientNet with improved resolution'
+        },
+        'efficientnet_b3': {
+            'name': 'EfficientNet-B3',
+            'params': '~12M',
+            'out_channels': [48, 136, 1536],
+            'description': 'Mid-size EfficientNet'
+        },
+        'efficientnet_b4': {
+            'name': 'EfficientNet-B4',
+            'params': '~19M',
+            'out_channels': [56, 160, 1792],
+            'description': 'Larger EfficientNet for higher accuracy'
         }
     }
     
