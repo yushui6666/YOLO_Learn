@@ -350,9 +350,9 @@ def suggest_hyperparameters(trial: optuna.Trial, search_space: Dict) -> Dict:
     if 'optimizer' in search_space:
         for key, spec in search_space['optimizer'].items():
             if spec['type'] == 'loguniform':
-                params[key] = trial.suggest_float(f'optimizer_{key}', spec['low'], spec['high'], log=True)
+                params[f'optimizer_{key}'] = trial.suggest_float(f'optimizer_{key}', spec['low'], spec['high'], log=True)
             elif spec['type'] == 'uniform':
-                params[key] = trial.suggest_float(f'optimizer_{key}', spec['low'], spec['high'])
+                params[f'optimizer_{key}'] = trial.suggest_float(f'optimizer_{key}', spec['low'], spec['high'])
     
     # 损失函数权重
     if 'loss' in search_space:
@@ -517,11 +517,113 @@ def objective(trial: optuna.Trial, optuna_config: Dict) -> float:
         return 0.0
 
 
+def print_search_info(optuna_config: Dict):
+    """打印超参数搜索的已知信息和搜索空间"""
+    print("\n" + "="*80)
+    print("开始超参数搜索")
+    print("="*80)
+    
+    # 打印已知信息（固定参数）
+    print("\n【已知信息（固定参数）】")
+    fixed = optuna_config['fixed_params']
+    
+    print("\n模型配置:")
+    print(f"  - 类别数: {fixed['model']['num_classes']}")
+    print(f"  - Backbone: {fixed['model'].get('backbone_name', 'CSPDarknet')}")
+    print(f"  - 图像尺寸: {fixed['training']['image_size']}")
+    print(f"  - 工作线程: {fixed['training']['num_workers']}")
+    
+    print("\n训练配置:")
+    search = optuna_config['search']
+    print(f"  - 训练 Epochs: {search['epochs']}")
+    print(f"  - 评估周期: {search['eval_period']}")
+    print(f"  - 早停耐心值: {search.get('early_stopping_patience', '无')}")
+    
+    print("\n优化器:")
+    print(f"  - 类型: {fixed['optimizer']['name']}")
+    print(f"  - Betas: {fixed['optimizer']['betas']}")
+    
+    print("\n调度器:")
+    print(f"  - 类型: {fixed['scheduler']['name']}")
+    print(f"  - Warmup Epochs: {fixed['scheduler']['warmup_epochs']}")
+    
+    print("\n推理配置:")
+    print(f"  - 置信度阈值: {fixed['inference']['conf_threshold']}")
+    print(f"  - IOU 阈值: {fixed['inference']['iou_threshold']}")
+    
+    print("\n数据集:")
+    print(f"  - 训练集: {fixed['dataset']['train']}")
+    print(f"  - 验证集: {fixed['dataset']['val']}")
+    
+    # 打印要搜索的参数
+    print("\n【要搜索的参数】")
+    search_space = optuna_config['search_space']
+    
+    # 训练参数
+    if 'training' in search_space:
+        print("\n训练参数:")
+        for key, spec in search_space['training'].items():
+            if spec['type'] == 'categorical':
+                print(f"  - {key}:")
+                print(f"    类型: 分类选择")
+                print(f"    选项: {spec['choices']}")
+            elif spec['type'] in ['uniform', 'loguniform']:
+                print(f"  - {key}:")
+                print(f"    类型: {'对数均匀' if spec['type'] == 'loguniform' else '均匀'}分布")
+                print(f"    范围: [{spec['low']}, {spec['high']}]")
+    
+    # 优化器参数
+    if 'optimizer' in search_space:
+        print("\n优化器参数:")
+        for key, spec in search_space['optimizer'].items():
+            if spec['type'] in ['uniform', 'loguniform']:
+                print(f"  - {key}:")
+                print(f"    类型: {'对数均匀' if spec['type'] == 'loguniform' else '均匀'}分布")
+                print(f"    范围: [{spec['low']}, {spec['high']}]")
+    
+    # 损失函数权重
+    if 'loss' in search_space:
+        print("\n损失函数权重:")
+        for key, spec in search_space['loss'].items():
+            if spec['type'] in ['uniform', 'loguniform']:
+                print(f"  - {key}: [{spec['low']}, {spec['high']}]")
+    
+    # 数据增强参数
+    if 'augmentation' in search_space:
+        print("\n数据增强参数:")
+        for key, spec in search_space['augmentation'].items():
+            if spec['type'] == 'categorical':
+                print(f"  - {key}: {spec['choices']}")
+            elif spec['type'] in ['uniform', 'loguniform']:
+                print(f"  - {key}: [{spec['low']}, {spec['high']}]")
+    
+    # 模型架构参数
+    if 'model' in search_space:
+        print("\n模型架构参数:")
+        for key, spec in search_space['model'].items():
+            if spec['type'] == 'categorical':
+                print(f"  - {key}: {spec['choices']}")
+            elif spec['type'] in ['uniform', 'loguniform']:
+                print(f"  - {key}: [{spec['low']}, {spec['high']}]")
+    
+    # 打印搜索配置
+    print("\n" + "="*80)
+    print("搜索配置:")
+    optuna_cfg = optuna_config['optuna']
+    print(f"  - 试验次数: {optuna_cfg['n_trials']}")
+    timeout_str = f"{optuna_cfg['timeout']}秒" if optuna_cfg['timeout'] else "无限制"
+    print(f"  - 超时时间: {timeout_str}")
+    print(f"  - 采样器: {optuna_cfg['sampler']}")
+    print(f"  - 剪枝器: {optuna_cfg['pruner']}")
+    print(f"  - 存储路径: {optuna_cfg['storage']}")
+    print(f"  - Study 名称: {optuna_cfg['study_name']}")
+    print("="*80 + "\n")
+
+
 def run_hyperparameter_search(optuna_config: Dict) -> Dict:
     """运行超参数搜索"""
-    print("\n" + "="*60)
-    print("开始超参数搜索")
-    print("="*60)
+    # 打印搜索信息
+    print_search_info(optuna_config)
     
     # 创建输出目录
     output_dir = Path("runs/optuna")

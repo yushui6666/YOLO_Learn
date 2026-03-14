@@ -1,0 +1,22 @@
+augmentation:
+  fliplr: 0.5118224668719554
+  hsv_h: 0.03046431701487496
+  hsv_s: 0.4684963584037626
+  hsv_v: 0.3784972925769112
+  mixup: 0.270985793932468
+  mosaic: 0.5756452583553553
+  scale: 0.6364574884089048
+  translate: 0.05318609330328085
+loss:
+  box_gain: 1.0645847096304883
+  cls_gain: 4.120560484089625
+  dfl_gain: 1.3370574007716876
+  obj_gain: 2.571160468640821
+model:
+  depth_multiple: 0.67
+  width_multiple: 0.75
+optimizer:
+  lr: 0.00014215406208666233
+  weight_decay: 0.000994494648076187
+training:
+  batch_size: 8

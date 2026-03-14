@@ -1,0 +1,203 @@
+# Optuna 超参数调优配置文件
+
+# ==================== Optuna 搜索设置 ====================
+optuna:
+  # Study 名称
+  study_name: 'yolov8_hyperparameter_search'
+  
+  # 试验次数：搜索多少组超参数
+  # 推荐：20-50 (快速测试), 100-200 (正式搜索), 500+ (全面搜索)
+  n_trials: 20
+  
+  # 超时时间（秒）：搜索的最长时间，null 表示不限制
+  # 示例：3600 (1小时), 7200 (2小时), 86400 (1天)
+  timeout: null
+  
+  # 采样器：超参数采样策略
+  # 可选：'TPESampler' (贝叶斯优化，推荐), 'RandomSampler' (随机搜索), 'CmaEsSampler' (CMA-ES)
+  sampler: 'TPESampler'
+  
+  # 剪枝器：提前终止差的试验
+  # 可选：'MedianPruner' (中位数剪枝), 'SuccessiveHalvingPruner', 'NopPruner' (不剪枝)
+  pruner: 'MedianPruner'
+  
+  # 存储路径：SQLite 数据库路径，用于保存搜索进度
+  storage: 'runs/optuna_study.db'
+  
+  # 是否从已有 study 恢复
+  # 如果为 true，会加载已有的 study 继续搜索
+  resume: false
+
+# ==================== 搜索阶段训练设置 ====================
+search:
+  # 搜索阶段训练的 epoch 数
+  # 推荐：5-10 (快速), 10-20 (标准), 20-30 (更准确)
+  # 说明：较少的 epoch 可以快速评估超参数，但可能不够准确
+  epochs: 15
+  
+  # 评估周期：每隔多少个 epoch 评估一次
+  eval_period: 5
+  
+  # 早停耐心值：验证集 mAP 连续多少次不提升则停止当前试验
+  # 推荐：3-5 (快速剪枝), 5-10 (标准)
+  early_stopping_patience: 3
+  
+  # 早停最小改进阈值
+  early_stopping_min_delta: 0.001
+
+# ==================== 完整训练设置 ====================
+full_training:
+  # 使用最佳参数完整训练的 epoch 数
+  epochs: 300
+  
+  # 评估周期
+  eval_period: 5
+  
+  # 保存周期
+  save_period: 50
+
+# ==================== 超参数搜索空间 ====================
+# 定义每个超参数的搜索范围
+search_space:
+  # 训练参数
+  training:
+    # 批次大小：每次迭代训练的样本数
+    # 推荐：8 (显存较小), 16 (标准), 32 (显存充足)
+    # 说明：大批次训练更稳定但需要更多显存，小批次泛化可能更好
+    batch_size:
+      type: 'categorical'
+      choices: [8, 16, 32]
+  
+  # 优化器参数
+  optimizer:
+    # 学习率：对数均匀分布
+    lr:
+      type: 'loguniform'
+      low: 1.0e-5
+      high: 1.0e-2
+    
+    # 权重衰减：对数均匀分布
+    weight_decay:
+      type: 'loguniform'
+      low: 1.0e-5
+      high: 1.0e-2
+  
+  # 损失函数权重
+  loss:
+    box_gain:
+      type: 'uniform'
+      low: 1.0
+      high: 10.0
+    
+    cls_gain:
+      type: 'uniform'
+      low: 0.5
+      high: 5.0
+    
+    dfl_gain:
+      type: 'uniform'
+      low: 0.5
+      high: 5.0
+    
+    obj_gain:
+      type: 'uniform'
+      low: 0.5
+      high: 5.0
+  
+  # 数据增强参数
+  augmentation:
+    mosaic:
+      type: 'uniform'
+      low: 0.5
+      high: 1.0
+    
+    mixup:
+      type: 'uniform'
+      low: 0.0
+      high: 0.3
+    
+    hsv_h:
+      type: 'uniform'
+      low: 0.0
+      high: 0.05
+    
+    hsv_s:
+      type: 'uniform'
+      low: 0.3
+      high: 0.9
+    
+    hsv_v:
+      type: 'uniform'
+      low: 0.2
+      high: 0.6
+    
+    scale:
+      type: 'uniform'
+      low: 0.3
+      high: 0.7
+    
+    translate:
+      type: 'uniform'
+      low: 0.0
+      high: 0.2
+    
+    fliplr:
+      type: 'uniform'
+      low: 0.3
+      high: 0.7
+  
+  # 模型架构参数（可选，可能需要更多显存）
+  model:
+    width_multiple:
+      type: 'categorical'
+      choices: [0.25, 0.5, 0.75]
+    
+    depth_multiple:
+      type: 'categorical'
+      choices: [0.33, 0.5, 0.67]
+
+# ==================== 固定参数 ====================
+# 搜索过程中保持不变的参数
+fixed_params:
+  training:
+    image_size: 640
+    num_workers: 8
+    pin_memory: true
+    save_dir: 'runs/train'
+    use_cpu: false
+  
+  model:
+    num_classes: 80
+    # 所有backbone使用torchvision标准实现
+    # 可选：'CSPDarknet'(ResNet34), 'ResNet18', 'ResNet34', 'ResNet50', 'ResNet101', 'MobileNetV3', 'VGG16', 'VGG19'
+    backbone_name: ' VGG19'
+    backbone_pretrained: false
+  
+  optimizer:
+    name: 'AdamW'
+    betas: [0.937, 0.999]
+    eps: 1.0e-8
+  
+  scheduler:
+    name: 'CosineAnnealingLR'
+    T_max: 300
+    eta_min: 1.0e-5
+    warmup_epochs: 10
+    warmup_start_lr: 1.0e-4
+  
+  inference:
+    conf_threshold: 0.5
+    iou_threshold: 0.45
+    max_det: 400
+    half: true
+  
+  evaluation:
+    iou_thresholds: [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+    conf_threshold: 0.001
+    iou_threshold: 0.45
+  
+  dataset:
+    train: 'dataset/coco/train2017/image'
+    val: 'dataset/coco/val2017/image'
+    annotations_train: 'dataset/coco/train2017/annotations/instances_train2017.json'
+    annotations_val: 'dataset/coco/val2017/annotation/instances_val2017.json'

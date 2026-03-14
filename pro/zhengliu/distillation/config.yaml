@@ -1,0 +1,49 @@
+# YOLO Knowledge Distillation Configuration
+
+# Paths
+teacher_model: "teacher_model/yolo26x.pt"
+student_model: "student_model/yolov8_resnet101.pt"  # 学生模型路径（如果存在）
+student_arch: "yolov8x.pt"  # 或者指定 YOLOv8 架构作为初始化
+output_dir: "outputs/distillation"
+
+# Dataset
+dataset:
+  train_images: "dataset/coco/train2017/image"
+  train_labels: "dataset/coco/train2017/annotations/instances_train2017.json"
+  val_images: "dataset/coco/val2017/image"
+  val_labels: "dataset/coco/val2017/annotation/instances_val2017.json"
+  nc: 80  # number of classes
+  names: []  # class names, will be loaded from annotation file
+
+# Training hyperparameters
+train:
+  epochs: 50
+  batch_size: 8
+  imgsz: 640
+  lr0: 0.01  # initial learning rate
+  lrf: 0.1   # final learning rate (lr0 * lrf)
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+
+# Distillation hyperparameters
+distill:
+  temperature: 4.0  # 蒸馏温度
+  alpha: 0.7        # 蒸馏损失权重 (teacher loss weight)
+  beta: 0.3         # 真实标签损失权重 (ground truth loss weight)
+  
+# Device
+device: "0"  # CUDA device, or "cpu"
+
+# Logging
+log:
+  tensorboard: true
+  log_dir: "outputs/logs"
+  print_freq: 10  # print every n batches
+
+# Checkpoint
+checkpoint:
+  save_freq: 5    # save checkpoint every n epochs
+  best_metric: "mAP"  # metric to track for best model
